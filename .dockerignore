@@ -1,0 +1,14 @@
+**/__pycache__
+**/.git
+**/.github
+**/.ci
+
+# Outputs
+*.jpg
+*.png
+*.gif
+*.mp4
+*.zip
+*.tar
+*.webp
+*.webm
