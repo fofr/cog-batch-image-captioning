@@ -45,8 +45,16 @@ class Predictor(BasePredictor):
         system_prompt: str = Input(
             description="System prompt for image analysis",
             default="""
-Write a two sentence caption for this image. Describe in the first sentence the contents and composition of the image. In the second sentence describe the style and type (painting, photo, etc) of the image. Only use language that would be used to prompt a text to image model. Do not include usage.
+Write a four sentence caption for this image. In the first sentence describe the style and type (painting, photo, etc) of the image. Describe in the remaining sentences the contents and composition of the image. Only use language that would be used to prompt a text to image model. Do not include usage. Comma separate keywords rather than using "or". Precise composition is important.
+
+A good example is:
+
+"An emoji, digital illustration, playful, whimsical. A cartoon zombie character with green skin and tattered clothes reaches forward with two hands, they have green skin, messy hair, an open mouth and gaping teeth, one eye is half closed."
 """,
+        ),
+        message_prompt: str = Input(
+            description="Message prompt for image captioning",
+            default="Caption this image please",
         ),
     ) -> Path:
         if os.path.exists("/tmp/outputs"):
@@ -66,6 +74,10 @@ Write a two sentence caption for this image. Describe in the first sentence the 
 
         self.extract_images_from_zip(image_zip_archive, SUPPORTED_IMAGE_TYPES)
 
+        image_count = sum(1 for filename in os.listdir("/tmp/outputs") if filename.lower().endswith(SUPPORTED_IMAGE_TYPES))
+        print(f"Number of images to be captioned: {image_count}")
+        print("===================================================")
+
         results = []
         csv_path = os.path.join("/tmp/outputs", "captions.csv")
         with open(csv_path, "w", newline="") as csvfile:
@@ -74,25 +86,29 @@ Write a two sentence caption for this image. Describe in the first sentence the 
 
             for filename in os.listdir("/tmp/outputs"):
                 if filename.lower().endswith(SUPPORTED_IMAGE_TYPES):
+                    print(f"Processing {filename}")
+
                     image_path = os.path.join("/tmp/outputs", filename)
                     if resize_images_for_captioning:
                         image_path = self.resize_image_if_needed(
                             image_path, max_dimension
                         )
                     caption = self.generate_caption(
-                        image_path, model, client, system_prompt
+                        image_path, model, client, system_prompt, message_prompt,
+                        caption_prefix, caption_suffix
                     )
-                    full_caption = f"{caption_prefix}{caption}{caption_suffix}"
+                    print(f"Caption: {caption}")
 
                     txt_filename = os.path.splitext(filename)[0] + ".txt"
                     txt_path = os.path.join("/tmp/outputs", txt_filename)
 
                     with open(txt_path, "w") as txt_file:
-                        txt_file.write(full_caption)
+                        txt_file.write(caption)
 
-                    csvwriter.writerow([full_caption, filename])
+                    csvwriter.writerow([caption, filename])
 
-                    results.append({"filename": filename, "caption": full_caption})
+                    results.append({"filename": filename, "caption": caption})
+                    print("===================================================")
 
         output_zip_path = "/tmp/captions_and_csv.zip"
         with zipfile.ZipFile(output_zip_path, "w") as zipf:
@@ -120,15 +136,11 @@ Write a two sentence caption for this image. Describe in the first sentence the 
                     with source, target:
                         shutil.copyfileobj(source, target)
 
-        # Print directory structure
-        print("Directory structure after extraction:")
+        # Print extracted files
+        print("Files extracted:")
         for root, dirs, files in os.walk("/tmp/outputs"):
-            level = root.replace("/tmp/outputs", "").count(os.sep)
-            indent = " " * 4 * level
-            print(f"{indent}{os.path.basename(root)}/")
-            sub_indent = " " * 4 * (level + 1)
             for f in files:
-                print(f"{sub_indent}{f}")
+                print(f"{os.path.join(root, f)}")
 
     def resize_image_if_needed(self, image_path: str, max_dimension: int) -> str:
         with Image.open(image_path) as img:
@@ -147,13 +159,20 @@ Write a two sentence caption for this image. Describe in the first sentence the 
                 print(f"Resized from {width}x{height} to {new_width}x{new_height}")
             else:
                 print(
-                    f"{image_path} size {width}x{height} within max dimension of {max_dimension}, not resizing"
+                    f"Not resizing. {width}x{height} within max dimension of {max_dimension}"
                 )
 
         return image_path
 
     def generate_caption(
-        self, image_path: str, model: str, client: OpenAI, system_prompt: str
+        self,
+        image_path: str,
+        model: str,
+        client: OpenAI,
+        system_prompt: str,
+        message_prompt: str,
+        caption_prefix: str,
+        caption_suffix: str,
     ) -> str:
         with open(image_path, "rb") as image_file:
             base64_image = base64.b64encode(image_file.read()).decode("utf-8")
@@ -161,6 +180,15 @@ Write a two sentence caption for this image. Describe in the first sentence the 
         image_type = os.path.splitext(image_path)[1][1:].lower()
         if image_type == "jpg":
             image_type = "jpeg"
+
+        # Prepare the message content based on prefix and suffix
+        message_content = message_prompt
+        if caption_prefix and caption_suffix:
+            message_content += f"\n\nPlease prefix the caption with '{caption_prefix}' and suffix it with '{caption_suffix}', ensuring correct grammar and flow. Do not change the prefix or suffix."
+        elif caption_prefix:
+            message_content += f"\n\nPlease prefix the caption with '{caption_prefix}', ensuring correct grammar and flow. Do not change the prefix."
+        elif caption_suffix:
+            message_content += f"\n\nPlease suffix the caption with '{caption_suffix}', ensuring correct grammar and flow. Do not change the suffix."
 
         response = client.chat.completions.create(
             model=model,
@@ -171,7 +199,7 @@ Write a two sentence caption for this image. Describe in the first sentence the 
                     "content": [
                         {
                             "type": "text",
-                            "text": "Caption this image please",
+                            "text": message_content,
                         },
                         {
                             "type": "image_url",
@@ -185,6 +213,4 @@ Write a two sentence caption for this image. Describe in the first sentence the 
             max_tokens=300,
         )
 
-        caption = response.choices[0].message.content
-        print(f"{image_path}: {caption}")
-        return caption
+        return response.choices[0].message.content
