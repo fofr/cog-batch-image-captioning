@@ -4,5 +4,6 @@ build:
   python_packages:
     - openai
     - anthropic
+    - google-generativeai
     - pillow
 predict: "predict.py:Predictor"

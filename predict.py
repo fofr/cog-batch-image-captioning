@@ -4,13 +4,14 @@ import zipfile
 import base64
 import csv
 import time
+import google.generativeai as genai
 from cog import BasePredictor, Input, Path, Secret
 from openai import OpenAI, OpenAIError
 from anthropic import Anthropic
 from PIL import Image
 
 
-SUPPORTED_IMAGE_TYPES = (".png", ".jpg", ".jpeg", ".gif", ".webp")
+SUPPORTED_IMAGE_TYPES = (".png", ".jpg", ".jpeg", ".webp")
 
 
 class Predictor(BasePredictor):
@@ -47,6 +48,8 @@ class Predictor(BasePredictor):
                 "claude-3-opus-20240229",
                 "claude-3-sonnet-20240229",
                 "claude-3-haiku-20240307",
+                "gemini-1.5-pro",
+                "gemini-1.5-flash",
             ],
             default="gpt-4o-2024-08-06",
         ),
@@ -56,6 +59,10 @@ class Predictor(BasePredictor):
         ),
         anthropic_api_key: Secret = Input(
             description="API key for Anthropic",
+            default=None,
+        ),
+        google_generativeai_api_key: Secret = Input(
+            description="API key for Google Generative AI",
             default=None,
         ),
         system_prompt: str = Input(
@@ -85,10 +92,17 @@ Good examples are:
             if not openai_api_key:
                 raise ValueError("OpenAI API key is required for GPT models")
             client = OpenAI(api_key=openai_api_key.get_secret_value())
-        else:
+        elif model.startswith("claude"):
             if not anthropic_api_key:
                 raise ValueError("Anthropic API key is required for Claude models")
             client = Anthropic(api_key=anthropic_api_key.get_secret_value())
+        elif model.startswith("gemini"):
+            if not google_generativeai_api_key:
+                raise ValueError(
+                    "Google Generative AI API key is required for Gemini models"
+                )
+            genai.configure(api_key=google_generativeai_api_key.get_secret_value())
+            client = genai.GenerativeModel(model_name=model)
 
         self.extract_images_from_zip(image_zip_archive, SUPPORTED_IMAGE_TYPES)
 
@@ -234,7 +248,7 @@ Good examples are:
                         image_type,
                         base64_image,
                     )
-                else:
+                elif model.startswith("claude"):
                     return self.generate_claude_caption(
                         model,
                         client,
@@ -242,6 +256,13 @@ Good examples are:
                         message_content,
                         image_type,
                         base64_image,
+                    )
+                elif model.startswith("gemini"):
+                    return self.generate_gemini_caption(
+                        client,
+                        system_prompt,
+                        message_content,
+                        image_path,
                     )
             except (OpenAIError, Exception) as e:
                 if attempt < max_retries - 1:
@@ -331,3 +352,15 @@ Good examples are:
             ],
         )
         return response.content[0].text
+
+    def generate_gemini_caption(
+        self,
+        client,
+        system_prompt: str,
+        message_content: str,
+        image_path: str,
+    ) -> str:
+        image = Image.open(image_path)
+        prompt = f"{system_prompt}\n\n{message_content}"
+        response = client.generate_content([prompt, image])
+        return response.text
