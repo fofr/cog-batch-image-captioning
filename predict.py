@@ -6,6 +6,7 @@ import csv
 import time
 from cog import BasePredictor, Input, Path, Secret
 from openai import OpenAI, OpenAIError
+from anthropic import Anthropic
 from PIL import Image
 
 
@@ -36,12 +37,25 @@ class Predictor(BasePredictor):
             default=1024,
         ),
         model: str = Input(
-            description="OpenAI model to use. Your OpenAI account will be charged for usage, see pricing: https://openai.com/api/pricing/",
-            choices=["gpt-4o-2024-08-06", "gpt-4o-mini", "gpt-4o", "gpt-4-turbo"],
+            description="AI model to use for captioning. Your OpenAI or Anthropic account will be charged for usage, see their pricing pages for details.",
+            choices=[
+                "gpt-4o-2024-08-06",
+                "gpt-4o-mini",
+                "gpt-4o",
+                "gpt-4-turbo",
+                "claude-3-5-sonnet-20240620",
+                "claude-3-opus-20240229",
+                "claude-3-sonnet-20240229",
+                "claude-3-haiku-20240307",
+            ],
             default="gpt-4o-2024-08-06",
         ),
         openai_api_key: Secret = Input(
-            description="OpenAI API key",
+            description="API key for OpenAI",
+            default=None,
+        ),
+        anthropic_api_key: Secret = Input(
+            description="API key for Anthropic",
             default=None,
         ),
         system_prompt: str = Input(
@@ -67,16 +81,14 @@ Good examples are:
             shutil.rmtree("/tmp/outputs")
         os.makedirs("/tmp/outputs")
 
-        key = (
-            openai_api_key.get_secret_value()
-            if openai_api_key
-            else os.environ.get("OPENAI_API_KEY")
-        )
-
-        if not key:
-            raise ValueError("OpenAI API key is required")
-
-        client = OpenAI(api_key=key)
+        if model.startswith("gpt"):
+            if not openai_api_key:
+                raise ValueError("OpenAI API key is required for GPT models")
+            client = OpenAI(api_key=openai_api_key.get_secret_value())
+        else:
+            if not anthropic_api_key:
+                raise ValueError("Anthropic API key is required for Claude models")
+            client = Anthropic(api_key=anthropic_api_key.get_secret_value())
 
         self.extract_images_from_zip(image_zip_archive, SUPPORTED_IMAGE_TYPES)
 
@@ -125,11 +137,8 @@ Good examples are:
                         csvwriter.writerow([caption, filename])
 
                         results.append({"filename": filename, "caption": caption})
-                    except OpenAIError as e:
+                    except (OpenAIError, Exception) as e:
                         print(f"Error processing {filename}: {str(e)}")
-                        errors.append({"filename": filename, "error": str(e)})
-                    except Exception as e:
-                        print(f"Unexpected error processing {filename}: {str(e)}")
                         errors.append({"filename": filename, "error": str(e)})
                     print("===================================================")
 
@@ -194,7 +203,7 @@ Good examples are:
         self,
         image_path: str,
         model: str,
-        client: OpenAI,
+        client,
         system_prompt: str,
         message_prompt: str,
         caption_prefix: str,
@@ -207,7 +216,45 @@ Good examples are:
         if image_type == "jpg":
             image_type = "jpeg"
 
-        # Prepare the message content based on prefix and suffix
+        message_content = self.prepare_message_content(
+            message_prompt, caption_prefix, caption_suffix
+        )
+
+        max_retries = 3
+        retry_delay = 5
+
+        for attempt in range(max_retries):
+            try:
+                if model.startswith("gpt"):
+                    return self.generate_openai_caption(
+                        model,
+                        client,
+                        system_prompt,
+                        message_content,
+                        image_type,
+                        base64_image,
+                    )
+                else:
+                    return self.generate_claude_caption(
+                        model,
+                        client,
+                        system_prompt,
+                        message_content,
+                        image_type,
+                        base64_image,
+                    )
+            except (OpenAIError, Exception) as e:
+                if attempt < max_retries - 1:
+                    print(f"API error: {str(e)}. Retrying in {retry_delay} seconds...")
+                    time.sleep(retry_delay)
+                else:
+                    raise e
+
+        raise Exception("Max retries reached. Unable to generate caption.")
+
+    def prepare_message_content(
+        self, message_prompt: str, caption_prefix: str, caption_suffix: str
+    ) -> str:
         message_content = message_prompt
         if caption_prefix and caption_suffix:
             message_content += f"\n\nPlease prefix the caption with '{caption_prefix}' and suffix it with '{caption_suffix}', ensuring correct grammar and flow. Do not change the prefix or suffix."
@@ -215,42 +262,72 @@ Good examples are:
             message_content += f"\n\nPlease prefix the caption with '{caption_prefix}', ensuring correct grammar and flow. Do not change the prefix."
         elif caption_suffix:
             message_content += f"\n\nPlease suffix the caption with '{caption_suffix}', ensuring correct grammar and flow. Do not change the suffix."
+        return message_content
 
-        max_retries = 3
-        retry_delay = 5
-
-        for attempt in range(max_retries):
-            try:
-                response = client.chat.completions.create(
-                    model=model,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
+    def generate_openai_caption(
+        self,
+        model: str,
+        client,
+        system_prompt: str,
+        message_content: str,
+        image_type: str,
+        base64_image: str,
+    ) -> str:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {
+                    "role": "user",
+                    "content": [
                         {
-                            "role": "user",
-                            "content": [
-                                {
-                                    "type": "text",
-                                    "text": message_content,
-                                },
-                                {
-                                    "type": "image_url",
-                                    "image_url": {
-                                        "url": f"data:image/{image_type};base64,{base64_image}",
-                                    },
-                                },
-                            ],
+                            "type": "text",
+                            "text": message_content,
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/{image_type};base64,{base64_image}",
+                            },
                         },
                     ],
-                    max_tokens=300,
-                )
-                return response.choices[0].message.content
-            except OpenAIError as e:
-                if attempt < max_retries - 1:
-                    print(
-                        f"OpenAI API error: {str(e)}. Retrying in {retry_delay} seconds..."
-                    )
-                    time.sleep(retry_delay)
-                else:
-                    raise e
+                },
+            ],
+            max_tokens=300,
+        )
+        return response.choices[0].message.content
 
-        raise Exception("Max retries reached. Unable to generate caption.")
+    def generate_claude_caption(
+        self,
+        model: str,
+        client,
+        system_prompt: str,
+        message_content: str,
+        image_type: str,
+        base64_image: str,
+    ) -> str:
+        response = client.messages.create(
+            model=model,
+            max_tokens=300,
+            system=system_prompt,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": f"image/{image_type}",
+                                "data": base64_image,
+                            },
+                        },
+                        {
+                            "type": "text",
+                            "text": message_content,
+                        },
+                    ],
+                },
+            ],
+        )
+        return response.content[0].text

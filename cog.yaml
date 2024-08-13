@@ -3,5 +3,6 @@ build:
   python_version: "3.11"
   python_packages:
     - openai
+    - anthropic
     - pillow
 predict: "predict.py:Predictor"
