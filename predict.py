@@ -1,11 +1,13 @@
-from cog import BasePredictor, Input, Path, Secret
 import os
 import shutil
 import zipfile
 import base64
 import csv
-from openai import OpenAI
+import time
+from cog import BasePredictor, Input, Path, Secret
+from openai import OpenAI, OpenAIError
 from PIL import Image
+
 
 SUPPORTED_IMAGE_TYPES = (".png", ".jpg", ".jpeg", ".gif", ".webp")
 
@@ -78,11 +80,16 @@ Good examples are:
 
         self.extract_images_from_zip(image_zip_archive, SUPPORTED_IMAGE_TYPES)
 
-        image_count = sum(1 for filename in os.listdir("/tmp/outputs") if filename.lower().endswith(SUPPORTED_IMAGE_TYPES))
+        image_count = sum(
+            1
+            for filename in os.listdir("/tmp/outputs")
+            if filename.lower().endswith(SUPPORTED_IMAGE_TYPES)
+        )
         print(f"Number of images to be captioned: {image_count}")
         print("===================================================")
 
         results = []
+        errors = []
         csv_path = os.path.join("/tmp/outputs", "captions.csv")
         with open(csv_path, "w", newline="") as csvfile:
             csvwriter = csv.writer(csvfile)
@@ -97,21 +104,33 @@ Good examples are:
                         image_path = self.resize_image_if_needed(
                             image_path, max_dimension
                         )
-                    caption = self.generate_caption(
-                        image_path, model, client, system_prompt, message_prompt,
-                        caption_prefix, caption_suffix
-                    )
-                    print(f"Caption: {caption}")
+                    try:
+                        caption = self.generate_caption(
+                            image_path,
+                            model,
+                            client,
+                            system_prompt,
+                            message_prompt,
+                            caption_prefix,
+                            caption_suffix,
+                        )
+                        print(f"Caption: {caption}")
 
-                    txt_filename = os.path.splitext(filename)[0] + ".txt"
-                    txt_path = os.path.join("/tmp/outputs", txt_filename)
+                        txt_filename = os.path.splitext(filename)[0] + ".txt"
+                        txt_path = os.path.join("/tmp/outputs", txt_filename)
 
-                    with open(txt_path, "w") as txt_file:
-                        txt_file.write(caption)
+                        with open(txt_path, "w") as txt_file:
+                            txt_file.write(caption)
 
-                    csvwriter.writerow([caption, filename])
+                        csvwriter.writerow([caption, filename])
 
-                    results.append({"filename": filename, "caption": caption})
+                        results.append({"filename": filename, "caption": caption})
+                    except OpenAIError as e:
+                        print(f"Error processing {filename}: {str(e)}")
+                        errors.append({"filename": filename, "error": str(e)})
+                    except Exception as e:
+                        print(f"Unexpected error processing {filename}: {str(e)}")
+                        errors.append({"filename": filename, "error": str(e)})
                     print("===================================================")
 
         output_zip_path = "/tmp/captions_and_csv.zip"
@@ -120,6 +139,11 @@ Good examples are:
                 for file in files:
                     if file.endswith(".txt") or file.endswith(".csv"):
                         zipf.write(os.path.join(root, file), file)
+
+        if errors:
+            print("\nError Summary:")
+            for error in errors:
+                print(f"File: {error['filename']}, Error: {error['error']}")
 
         return Path(output_zip_path)
 
@@ -194,27 +218,41 @@ Good examples are:
         elif caption_suffix:
             message_content += f"\n\nPlease suffix the caption with '{caption_suffix}', ensuring correct grammar and flow. Do not change the suffix."
 
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {
-                    "role": "user",
-                    "content": [
+        max_retries = 3
+        retry_delay = 5
+
+        for attempt in range(max_retries):
+            try:
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
                         {
-                            "type": "text",
-                            "text": message_content,
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/{image_type};base64,{base64_image}",
-                            },
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": message_content,
+                                },
+                                {
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": f"data:image/{image_type};base64,{base64_image}",
+                                    },
+                                },
+                            ],
                         },
                     ],
-                },
-            ],
-            max_tokens=300,
-        )
+                    max_tokens=300,
+                )
+                return response.choices[0].message.content
+            except OpenAIError as e:
+                if attempt < max_retries - 1:
+                    print(
+                        f"OpenAI API error: {str(e)}. Retrying in {retry_delay} seconds..."
+                    )
+                    time.sleep(retry_delay)
+                else:
+                    raise e
 
-        return response.choices[0].message.content
+        raise Exception("Max retries reached. Unable to generate caption.")
