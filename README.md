@@ -17,8 +17,3 @@ https://replicate.com/fofr/batch-image-captioning
 - Flexible system and message prompts
 - Error handling and retry mechanism
 - Output as a ZIP file containing captions that match image filenames as well as a CSV summary
-
-## Usage
-
-1. Prepare a ZIP archive containing the images you want to caption.
-2. Run the predictor with your desired options:
