@@ -150,7 +150,6 @@ Good examples are:
     def extract_images_from_zip(
         self, image_zip_archive: Path, supported_image_types: tuple
     ):
-        # Unzip the archive and flatten the directory structure
         with zipfile.ZipFile(image_zip_archive, "r") as zip_ref:
             for file in zip_ref.namelist():
                 if (
@@ -164,7 +163,6 @@ Good examples are:
                     with source, target:
                         shutil.copyfileobj(source, target)
 
-        # Print extracted files
         print("Files extracted:")
         for root, dirs, files in os.walk("/tmp/outputs"):
             for f in files:
