@@ -173,7 +173,7 @@ Good examples are:
                         zipf.write(os.path.join(root, file), file)
                     elif file in original_images:
                         clean_filename = file[9:]
-                        zipf.write(os.path.join(root, clean_filename), clean_filename)
+                        zipf.write(os.path.join(root, file), clean_filename)
 
         if errors:
             print("\nError Summary:")
