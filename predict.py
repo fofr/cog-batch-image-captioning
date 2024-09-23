@@ -33,6 +33,10 @@ class Predictor(BasePredictor):
             description="Whether to resize images for captioning. This makes captioning cheaper",
             default=True,
         ),
+        include_images: bool = Input(
+            description="Whether to include the original images in the response zip",
+            default=False
+        ),
         max_dimension: int = Input(
             description="Maximum dimension (width or height) for resized images",
             default=1024,
@@ -115,13 +119,14 @@ Good examples are:
         print("===================================================")
 
         original_images = []
-        for filename in os.listdir("/tmp/outputs"):
-            if filename.lower().endswith(SUPPORTED_IMAGE_TYPES):
-                image_path = os.path.join("/tmp/outputs", filename)
-                cpy = Image.open(image_path)
-                new_path = "/tmp/outputs/original_" + filename
-                cpy.save(new_path)
-                original_images.append("original_" + filename)
+        if include_images:
+            for filename in os.listdir("/tmp/outputs"):
+                if filename.lower().endswith(SUPPORTED_IMAGE_TYPES):
+                    image_path = os.path.join("/tmp/outputs", filename)
+                    cpy = Image.open(image_path)
+                    new_path = "/tmp/outputs/original_" + filename
+                    cpy.save(new_path)
+                    original_images.append("original_" + filename)
 
         results = []
         errors = []
