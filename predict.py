@@ -114,6 +114,15 @@ Good examples are:
         print(f"Number of images to be captioned: {image_count}")
         print("===================================================")
 
+        original_images = []
+        for filename in os.listdir("/tmp/outputs"):
+            if filename.lower().endswith(SUPPORTED_IMAGE_TYPES):
+                image_path = os.path.join("/tmp/outputs", filename)
+                cpy = Image.open(image_path)
+                new_path = "/tmp/outputs/original_" + filename
+                cpy.save(new_path)
+                original_images.append("original_" + filename)
+
         results = []
         errors = []
         csv_path = os.path.join("/tmp/outputs", "captions.csv")
@@ -122,7 +131,7 @@ Good examples are:
             csvwriter.writerow(["caption", "image_file"])
 
             for filename in os.listdir("/tmp/outputs"):
-                if filename.lower().endswith(SUPPORTED_IMAGE_TYPES):
+                if filename.lower().endswith(SUPPORTED_IMAGE_TYPES) and filename not in original_images:
                     print(f"Processing {filename}")
 
                     image_path = os.path.join("/tmp/outputs", filename)
@@ -162,6 +171,9 @@ Good examples are:
                 for file in files:
                     if file.endswith(".txt") or file.endswith(".csv"):
                         zipf.write(os.path.join(root, file), file)
+                    elif file in original_images:
+                        clean_filename = file[9:]
+                        zipf.write(os.path.join(root, clean_filename), clean_filename)
 
         if errors:
             print("\nError Summary:")
