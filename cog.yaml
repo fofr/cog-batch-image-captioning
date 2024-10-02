@@ -1,9 +1,7 @@
 build:
   gpu: false
-  python_version: "3.11"
+  python_version: "3.12.3"
   python_packages:
-    - openai
-    - anthropic
-    - google-generativeai
     - pillow
+    - aiohttp
 predict: "predict.py:Predictor"
