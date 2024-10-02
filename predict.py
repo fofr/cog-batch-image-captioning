@@ -183,6 +183,9 @@ Good examples are:
             start_time = time.time()
             responses = await asyncio.gather(*captioning_requests)
             del captioning_requests
+            for image in images:
+                os.unlink(image)
+
             gc.collect()
 
             end_time = time.time()
